@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"log"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
@@ -15,9 +15,6 @@ func resolveQueueUrl(queueName string, svc *sqs.SQS) (error, string) {
 	resp, err := svc.GetQueueUrl(params)
 
 	if err != nil {
-		// Print the error, cast err to awserr.Error to get the Code and
-		// Message from an error.
-		fmt.Println(err.Error())
 		return err, ""
 	}
 
@@ -33,21 +30,20 @@ func main() {
 
 	flag.Parse()
 
-	// Create an EC2 service object in the "us-west-2" region
-	// Note that you can also configure your region globally by
-	// exporting the AWS_REGION environment variable
-	svc := sqs.New(session.New(), aws.NewConfig().WithRegion("us-west-2"))
+	ses := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := sqs.New(ses)
 
 	err, sourceUrl := resolveQueueUrl(*sourceQueueName, svc)
-
 	if err != nil {
-		return
+		log.Fatalf("Fatal: %s", err)
 	}
 
 	err, destUrl := resolveQueueUrl(*destQueueName, svc)
 
 	if err != nil {
-		return
+		log.Fatalf("Fatal: %s", err)
 	}
 
 	params := &sqs.ReceiveMessageInput{
@@ -58,24 +54,23 @@ func main() {
 	}
 
 	for {
-		fmt.Println("Starting new batch")
+		log.Println("Starting new batch")
 
 		resp, err := svc.ReceiveMessage(params)
 
 		if len(resp.Messages) == 0 {
-			fmt.Println("Batch doesn't have any messages, transfer complete")
+			log.Println("Batch doesn't have any messages, transfer complete")
 			return
 		}
 
 		if err != nil {
-			// Print the error, cast err to awserr.Error to get the Code and
+			// Print the error, cast err to awserr. Error to get the Code and
 			// Message from an error.
-			fmt.Println(err.Error())
+			log.Fatalln(err.Error())
 			return
 		}
 
-		fmt.Println("Messages to transfer:")
-		fmt.Println(resp.Messages)
+		log.Printf("Messages to transfer: %s", resp.Messages)
 
 		batch := &sqs.SendMessageBatchInput{
 			QueueUrl: aws.String(destUrl),
@@ -85,19 +80,18 @@ func main() {
 		sendResp, err := svc.SendMessageBatch(batch)
 
 		if err != nil {
-			fmt.Println("Failed to unqueue messages to the destination queue")
-			fmt.Println(err.Error())
-			return
+			log.Println("Failed to unqueue messages to the destination queue")
+			log.Fatalln(err.Error())
 		}
 
 		if len(sendResp.Failed) > 0 {
-			fmt.Println("Failed to unqueue messages to the destination queue")
-			fmt.Println(sendResp.Failed)
+			log.Println("Failed to unqueue messages to the destination queue")
+			log.Fatalln(sendResp.Failed)
 			return
 		}
 
-		fmt.Println("Unqueued to destination the following: ")
-		fmt.Println(sendResp.Successful)
+		log.Println("Unqueued to destination the following: ")
+		log.Println(sendResp.Successful)
 
 		if len(sendResp.Successful) == len(resp.Messages) {
 			deleteMessageBatch := &sqs.DeleteMessageBatchInput{
@@ -108,18 +102,16 @@ func main() {
 			deleteResp, err := svc.DeleteMessageBatch(deleteMessageBatch)
 
 			if err != nil {
-				fmt.Println("Error deleting messages, exiting...")
-				return
+				log.Fatalln("Error deleting messages, exiting...")
 			}
 
 			if len(deleteResp.Failed) > 0 {
-				fmt.Println("Error deleting messages, the following were not deleted")
-				fmt.Println(deleteResp.Failed)
-				return
+				log.Println("Error deleting messages, the following were not deleted")
+				log.Fatalln(deleteResp.Failed)
 			}
 
-			fmt.Printf("Deleted: %d messages \n", len(deleteResp.Successful))
-			fmt.Println("========================")
+			log.Printf("Deleted: %d messages \n", len(deleteResp.Successful))
+			log.Println("========================")
 		}
 	}
 
